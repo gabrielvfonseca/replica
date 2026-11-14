@@ -11,7 +11,8 @@ recorded run.
 | | |
 |---|---|
 | Suite | `benchmarks/run.sh`: every method, concurrency N = 1/5/10, plus `replica base build` |
-| Latest run | 2026-11-09, Apple M1 Max, macOS 26.6.2 (25G83), **under load** (1-minute load ~18–129 on 10 cores; other sessions were running). Absolute times are inflated and disk figures are noisy — treat them as lower bounds on Replica's advantage and upper bounds on the alternatives. |
+| Latest run | 2026-11-14, Intel Xeon W-2140B (x86_64), macOS 15.7.3 (24G419), moderate load (1-min load ~14–13 on 16 cores). |
+| Previous run | 2026-11-09, Apple M1 Max, macOS 26.6.2 (25G83), **under load** (1-minute load ~18–129 on 10 cores; other sessions were running). Absolute times are inflated and disk figures are noisy — treat them as lower bounds on Replica's advantage and upper bounds on the alternatives. |
 | Clean reference | 2026-10-25, previous harness, measured on a quiet machine. Kept below, with corrections. |
 
 The harness refuses to start while the 1-minute load exceeds a quarter of the
@@ -95,6 +96,56 @@ concurrent workspaces, `replica new` is about 230 ms median versus about
 `git clone` + setup.
 
 ## Results
+
+### 2026-11-14 on Intel Xeon W-2140B (x86_64), macOS 15.7.3 (24G419)
+
+Load: 1-minute average ~14 at start and ~13 at end on 16 cores. Source: `benchmarks/results/2026-11-14-x86_64-macos15.7.3.{md,json}`.
+Fixture: 39 locked packages, 1,739 files after setup, 11 MB installed.
+
+| Project | Concurrency | Method | Median (ms) | P95 (ms) | Total wall (ms) | Disk delta (KB) |
+|---|---|---|---|---|---|---|
+| project-1 | 1 | git clone + setup | 974.5 | 1576.7 | 12313.2 | 141712 |
+| project-1 | 1 | git worktree + setup | 841.8 | 870.2 | 9666.5 | 126840 |
+| project-1 | 1 | pnpm global store | 938.0 | 1634.1 | 11351.6 | 123424 |
+| project-1 | 1 | cp -c -R of base | 581.8 | 1194.2 | 16065.3 | 16632 |
+| project-1 | 1 | **replica new** | **119.4** | 141.5 | 5080.9 | -7604 |
+| project-1 | 5 | git clone + setup | 1777.7 | 1878.5 | 19424.1 | 639284 |
+| project-1 | 5 | git worktree + setup | 1702.1 | 1869.1 | 18515.2 | 633664 |
+| project-1 | 5 | pnpm global store | 1805.6 | 1901.2 | 19692.4 | 632240 |
+| project-1 | 5 | cp -c -R of base | 982.7 | 1034.4 | 22356.4 | 56024 |
+| project-1 | 5 | **replica new** | **237.3** | 359.2 | 9511.5 | 81320 |
+| project-1 | 10 | git clone + setup | 4788.3 | 5590.7 | 49731.7 | 1283836 |
+| project-1 | 10 | git worktree + setup | 4678.3 | 6056.3 | 50352.9 | 1308656 |
+| project-1 | 10 | pnpm global store | 5514.3 | 6349.0 | 58655.9 | 1263868 |
+| project-1 | 10 | cp -c -R of base | 1904.1 | 2425.9 | 43517.0 | 106140 |
+| project-1 | 10 | **replica new** | **303.4** | 472.9 | 12451.9 | 119032 |
+
+**Base build (one time):** 1.15 s (1,739 files, 11.8 MB), setup `npm ci --no-audit --no-fund`.
+
+**Break-even:** Replica is ahead after 1 workspace — the one-time base build
+(~1.2 s) is less than a single `git clone` + `npm ci` (~1 s).
+
+What this run supports:
+
+- Relative ordering held: `replica new` (~119 ms at N=1) was the fastest
+  creation method, ahead of `cp -c -R` (~582 ms) and all git/pnpm methods
+  (about 0.8–1 s).
+- Under concurrency, `replica new` stays about 6–16x faster than `cp -c -R`:
+  at N = 10, replica median ~303 ms versus cp ~1.9 s for all 10 workspaces.
+- Disk figures: clonefile methods add APFS metadata per file (~7–12 KB at N=1,
+  ~8–12 KB/workspace at N=10); git/pnpm methods copy full data (~120–130 MB/clone).
+
+### 2026-11-14 microbench on Intel Xeon W-2140B (x86_64), macOS 15.7.3 (24G419)
+
+Source: `benchmarks/results/2026-11-14-x86_64-macos15.7.3-microbench.{md,json}`.
+
+| Method | Runs | Median (ms) | P95 (ms) |
+|---|---|---|---|
+| **replica new (whole-tree clonefile)** | 30 | **53** | 68 |
+| cp -c -R of prebuilt base (per-file clonefile) | 30 | 451 | 560 |
+
+- `replica new` uses a single `clonefile(2)` on the base root; `cp -c -R`
+  walks the tree calling `clonefile` per file. Whole-tree is ~8.5x faster.
 
 ### 2026-11-09 on Apple M1 Max, macOS 26.6.2 (25G83), **under load**
 
