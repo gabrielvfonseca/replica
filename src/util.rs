@@ -19,19 +19,31 @@ pub fn parse_ttl(s: &str) -> Result<i64> {
     Ok(n * mult)
 }
 
-/// Short unique-ish workspace id (hex). Collisions are caught by the UNIQUE path
-/// constraint and by clonefile refusing to overwrite.
+/// Workspace id (16 hex chars). The first 8 encode nanoseconds since epoch,
+/// so ids sort by creation time; the last 12 come from `/dev/urandom`, which
+/// makes same-instant collisions astronomically unlikely. The UNIQUE path
+/// constraint in the store is still the final backstop.
 pub fn new_id() -> String {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static CTR: AtomicU32 = AtomicU32::new(0);
+    use std::io::Read;
     let t = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
+        .map(|d| (d.as_nanos() & 0xffff_ffff) as u32)
         .unwrap_or(0);
-    let mix = t
-        ^ ((std::process::id() as u128) << 24)
-        ^ ((CTR.fetch_add(1, Ordering::Relaxed) as u128) << 48);
-    format!("{:08x}", (mix & 0xffff_ffff) as u32)
+    let mut buf = [0u8; 6];
+    match std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut buf)) {
+        Ok(()) => {
+            let r = u64::from_le_bytes([buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], 0, 0]);
+            format!("{:08x}{:012x}", t, r)
+        }
+        // urandom is always present on macOS; fall back to a counter if not.
+        Err(_) => {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static CTR: AtomicU32 = AtomicU32::new(0);
+            let pid = std::process::id() as u64;
+            let c = CTR.fetch_add(1, Ordering::Relaxed) as u64;
+            format!("{:08x}{:012x}", t, (pid << 32) | c)
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.2.0 - 2026-11-15
+
+### Added
+- `replica new --ref <branch>`: create a workspace from a specific branch. If the branch's lockfile matches the base's recorded hash, the workspace is cloned directly. If it differs, Replica clones the base, checks out the branch, and runs the setup command (an incremental install), reporting which path it took.
+- `replica new --require-fresh`: refuse to create a workspace from a stale base (exit 2).
+- `replica base refresh` fast path: clonefiles the base, fetches origin, resets to `origin/HEAD`, and re-runs setup only if a lockfile changed. Falls back to a full rebuild on failure.
+- `replica base check`: detect build output that breaks when cloned (absolute paths in venvs, `node_modules/.bin`, `.tsbuildinfo`).
+- Concurrency tests: `tests/concurrency.rs` runs 10 simultaneous `replica new`/use/`rm` cycles with zero SQLite busy errors.
+- Git behavior tests: `tests/git_workspace.rs` verifies a workspace commits and pushes without touching the base, and refresh picks up new commits.
+- Parallel safety: `replica new` and `replica gc` are safe to run at once. Each workspace is created under a lease (`.replica/lease`) so `gc` never removes a workspace that is still being set up or is in use.
+- Benchmark suite extended: concurrency (N = 1, 5, 10), pnpm global store, `cp -c`, `git worktree`, full metrics (P50, P95, min, max), and recorded runs in `benchmarks/results/`.
+- Agent skills in `skills/`: `replica`, `replica-base`, `replica-maintenance`, `replica-dev`, `replica-benchmarks`, `replica-release`.
+
+### Changed
+- `replica setup` installs the SKILL.md skill, replacing `skill.toml` and `instructions.md`.
+- `replica setup` keeps existing replaced configs unless `--force` is given. `--force` always backs up the original first.
+- `replica setup` no longer duplicates appended configs when run again.
+- Base metadata records the repo and setup command, and the database migrates to add them.
+- README rewritten: git workflow in workspaces, base refresh, disk cost after changes, measured file counts, and a full account of the benchmark numbers.
+- Benchmark docs now state what was measured. Clone disk cost is about 1.4 MB of APFS metadata per clone, not zero.
+
+### Fixed
+- Workspace IDs are now 16 hex chars (8 time-based + 8 random) instead of 8. The old scheme could produce identical IDs for two workspaces created in the same process within a few hundred nanoseconds, which would cause a data-loss collision on the workspace directory.
+- `scripts/install.sh` file mode corrected.
+- Removed an `unwrap` from `replica base check`'s `pyvenv.cfg` parsing.
+
+### Notes
+- Homebrew formula is not part of the release yet (see HOMEBREW.md).
+- Known open items: orphan sweep, concurrency transactions, post-clone cleanup flag (see docs/ROADMAP.md).
+
 ## 0.1.0 - 2026-11-09
 
 ### Added
