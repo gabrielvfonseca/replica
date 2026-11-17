@@ -1,16 +1,15 @@
 class Replica < Formula
   desc "Isolated APFS clonefile workspaces for AI agents"
   homepage "https://github.com/gabrielvfonseca/replica"
-  version "0.2.0"
   license "Apache-2.0"
   head "https://github.com/gabrielvfonseca/replica.git", branch: "main"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/gabrielvfonseca/replica/releases/download/v#{version}/replica-darwin-arm64"
+      url "https://github.com/gabrielvfonseca/replica/releases/download/v0.2.0/replica-darwin-arm64"
       sha256 "4782930ec5c02ff2c8673ec30028ffad3c098c714c4593b47817fcc53b5a62e0"
     else
-      url "https://github.com/gabrielvfonseca/replica/releases/download/v#{version}/replica-darwin-x86_64"
+      url "https://github.com/gabrielvfonseca/replica/releases/download/v0.2.0/replica-darwin-x86_64"
       sha256 "f54e37f86d34b2e9d5cc69094118a704cdfee15201ece794538fdb1751fc3f23"
     end
   end
