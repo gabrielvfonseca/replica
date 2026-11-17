@@ -1,53 +1,46 @@
 # Homebrew
 
-Replica is **not available through Homebrew yet**. Install it with the
-installer script or from source (see [README](README.md#install)).
+Replica is available through Homebrew via a tap of this repository.
 
-## Why `brew install` does not work
-
-Homebrew installs formulae from *taps*, and a tap is a repository with a
-`Formula/` directory at its root. This repository has no such directory, so
-`brew install` has nothing to read. Checked on Homebrew 7.0.12:
-
-- `brew install <formula URL>` fails with `Invalid tap name`
-- `brew install ./path/to/replica.rb` (relative or absolute) fails with `Invalid tap name`
-- A tap whose root has `Formula/` works. A local test with a `Formula` symlink
-  pointing at a formula directory resolved the formula after `brew trust`.
-
-## Where the formula is
-
-The formula was removed from the working tree, so it is not in `main` now. It is
-still in history: the last commit that contains it is **`16ad02e`**. Its
-checksums match the published v0.1.0 release artifacts.
+## Install
 
 ```sh
-git show 16ad02e:homebrew/Formula/replica.rb > replica.rb    # inspect or restore it
+brew tap gabrielvfonseca/replica https://github.com/gabrielvfonseca/replica
+brew trust gabrielvfonseca/replica
+brew install gabrielvfonseca/replica/replica
 ```
 
-The formula installs the prebuilt binary for the machine's architecture
-(`replica-darwin-arm64` or `replica-darwin-x86_64`) from the GitHub release, and
-has a `--HEAD` build from source with Rust.
+`brew trust` is required on Homebrew 7+ for third-party taps.
 
-## To enable Homebrew later
+Or, if you prefer a local formula (no tap needed):
 
-Pick one layout and tell the release process about it:
+```sh
+brew install ./Formula/replica.rb
+```
 
-1. **A root `Formula/` in this repository.** Restore the formula there (for
-   example, `git show 16ad02e:homebrew/Formula/replica.rb > Formula/replica.rb`).
-   Users then run:
-   ```sh
-   brew tap gabrielvfonseca/replica https://github.com/gabrielvfonseca/replica
-   brew trust gabrielvfonseca/replica
-   brew install gabrielvfonseca/replica/replica
-   ```
-   `brew trust` is needed on Homebrew 7 for third-party taps.
-2. **A separate `homebrew-tap` repository.** Users run
-   `brew tap gabrielvfonseca/tap` and `brew install replica`. This needs a
-   new public repository.
+## Build from source (HEAD)
 
-Either way, the formula's `version`, `url`, and `sha256` values must match the
-release. Copy them from `bin/sha256sums.txt` after `scripts/release.sh X.Y.Z`
-has produced the artifacts.
+```sh
+brew install --HEAD gabrielvfonseca/replica/replica
+# or
+brew install --HEAD ./Formula/replica.rb
+```
+
+## Auto-update on new releases
+
+The formula reads version and checksums from GitHub releases. When a new
+release is published, update the formula by copying `version`, `url`, and
+`sha256` from `bin/sha256sums.txt` (produced by `scripts/release.sh X.Y.Z`).
+
+## Background GC service
+
+```sh
+brew services start replica
+```
+
+Runs `replica gc` every 10 minutes. Uses `REPLICA_ROOT=$HOME/replica` (launchd
+doesn't read your shell profile). If your workspaces live elsewhere, run
+`replica gc` from cron or your own launchd with the correct `REPLICA_ROOT`.
 
 ## Other ways to install
 
