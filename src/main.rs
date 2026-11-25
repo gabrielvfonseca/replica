@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use replica::error::{self, CliError, EXIT_DISK_FULL, EXIT_NO_BASE};
 use replica::ui::{self, Status};
-use replica::{base_check, clone, gc, help, lockfile, setup, store, util, volume};
+use replica::{base_check, clone, config, gc, help, init, lockfile, setup, store, util, volume};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -119,6 +119,19 @@ enum Cmd {
         #[arg(long)]
         config: Option<PathBuf>,
     },
+    /// Initialize a new project with .replica/ configuration
+    #[command(display_order = 11)]
+    Init {
+        /// Project root (default: current directory)
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Non-interactive: use defaults, don't prompt
+        #[arg(long)]
+        yes: bool,
+        /// Force overwrite existing config
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -127,10 +140,10 @@ enum BaseCmd {
     Build {
         /// Git repo URL or local path
         #[arg(long)]
-        repo: String,
+        repo: Option<String>,
         /// Command run inside the clone to install dependencies, e.g. "npm ci"
         #[arg(long)]
-        setup: String,
+        setup: Option<String>,
     },
     /// Scan the base for absolute paths that will break inside clones
     Check,
@@ -165,6 +178,10 @@ fn run() -> Result<()> {
     if let Cmd::Help { topic } = &cli.cmd {
         return help::print(topic.as_deref());
     }
+    // Init only writes project config and never touches the root, so it runs before the root checks.
+    if let Cmd::Init { path, yes, force } = &cli.cmd {
+        return init::run_init(path.as_deref(), *yes, *force);
+    }
     // Setup only writes agent configs and never touches the root, so it runs before the root checks.
     if let Cmd::Setup {
         homebrew,
@@ -173,7 +190,9 @@ fn run() -> Result<()> {
         config,
     } = &cli.cmd
     {
-        return setup::run_setup(&root(), *homebrew, *force, *dry_run, config.as_deref());
+        // Detect project root for project-specific templates and skills
+        let project_root = std::env::current_dir().ok().and_then(|cwd| config::find_project_root(&cwd));
+        return setup::run_setup(&root(), *homebrew, *force, *dry_run, config.as_deref(), project_root.as_deref());
     }
 
     let r = root();
@@ -202,25 +221,56 @@ fn run() -> Result<()> {
         }
     }
 
+    // Detect project root for config-aware commands
+    let project_root = match &cli.cmd {
+        Cmd::New { .. } | Cmd::Base { cmd: BaseCmd::Build { .. } } | Cmd::Gc { .. } => {
+            std::env::current_dir().ok().and_then(|cwd| config::find_project_root(&cwd))
+        }
+        _ => None,
+    };
+
     match cli.cmd {
         // Handled before the root checks above.
-        Cmd::Help { .. } | Cmd::Setup { .. } => {}
+        Cmd::Help { .. } | Cmd::Setup { .. } | Cmd::Init { .. } => {}
         Cmd::New {
             ttl,
             name,
             post_clone,
             require_fresh,
             ref_branch,
-        } => new_workspace(
-            &r,
-            &ws_root,
-            &db,
-            &ttl,
-            name,
-            post_clone,
-            require_fresh,
-            ref_branch.as_deref(),
-        )?,
+        } => {
+            let effective_config = if let Some(proj_root) = &project_root {
+                config::load_project_config(proj_root).map(|rc| rc.config).unwrap_or_default()
+            } else {
+                config::ProjectConfig::default()
+            };
+
+            // Apply config defaults, CLI flags take precedence
+            let ttl = if ttl == "2h" && effective_config.workspace.default_ttl.is_some() {
+                effective_config.workspace.default_ttl.unwrap()
+            } else {
+                ttl
+            };
+            let name = name.or_else(|| effective_config.workspace.default_name_template.clone());
+            let post_clone = if post_clone.is_none() && !effective_config.workspace.post_clone_hooks.is_empty() {
+                Some(effective_config.workspace.post_clone_hooks.join(" && "))
+            } else {
+                post_clone
+            };
+            let require_fresh = require_fresh || effective_config.workspace.require_fresh_default.unwrap_or(false);
+            let ref_branch = ref_branch.or_else(|| effective_config.base.default_branch.clone());
+
+            new_workspace(
+                &r,
+                &ws_root,
+                &db,
+                &ttl,
+                name,
+                post_clone,
+                require_fresh,
+                ref_branch.as_deref(),
+            )?
+        }
         Cmd::Env { id } => {
             let ws = require_ws(&db, &id)?;
             let p = ws_root.join(&ws.id);
@@ -238,10 +288,114 @@ fn run() -> Result<()> {
             ui::status(Status::Ok, &format!("touched {}", ws.id));
         }
         Cmd::Rm { ids } => remove_workspaces(&db, &ws_root, &ids)?,
-        Cmd::Gc { dry_run, high, low } => run_gc(&db, &r, &ws_root, dry_run, high, low)?,
+        Cmd::Gc { dry_run, high, low } => {
+            let effective_high = if let Some(proj_root) = &project_root {
+                config::load_project_config(proj_root)
+                    .map(|rc| rc.config.gc.high_water_mark.unwrap_or(high))
+                    .unwrap_or(high)
+            } else {
+                high
+            };
+            let effective_low = if let Some(proj_root) = &project_root {
+                config::load_project_config(proj_root)
+                    .map(|rc| rc.config.gc.low_water_mark.unwrap_or(low))
+                    .unwrap_or(low)
+            } else {
+                low
+            };
+            run_gc(&db, &r, &ws_root, dry_run, effective_high, effective_low)?
+        }
         Cmd::Stats { json } => stats(&r, &db, json)?,
         Cmd::Base { cmd } => match cmd {
-            BaseCmd::Build { repo, setup } => build_base(&r, &db, &repo, &setup)?,
+            BaseCmd::Build { repo, setup } => {
+                let effective_config = if let Some(proj_root) = &project_root {
+                    config::load_project_config(proj_root).map(|rc| rc.config).unwrap_or_default()
+                } else {
+                    config::ProjectConfig::default()
+                };
+
+                // Determine setup command: CLI flag > config > auto-detect
+                let config_setup = effective_config.base.setup_cmd;
+                let project_root_for_setup = project_root.clone();
+                let setup = setup.or(config_setup).or_else(move || {
+                    // Auto-detect setup command based on project files
+                    let check_dir = project_root_for_setup.or_else(|| std::env::current_dir().ok());
+                    check_dir.and_then(|dir| {
+                        if dir.join("Cargo.toml").exists() {
+                            Some("cargo build --release".to_string())
+                        } else if dir.join("package.json").exists() {
+                            // Check for pnpm, yarn, or npm
+                            if dir.join("pnpm-lock.yaml").exists() {
+                                Some("pnpm install".to_string())
+                            } else if dir.join("yarn.lock").exists() {
+                                Some("yarn install".to_string())
+                            } else {
+                                Some("npm ci".to_string())
+                            }
+                        } else if dir.join("go.mod").exists() {
+                            Some("go build ./...".to_string())
+                        } else if dir.join("Makefile").exists() || dir.join("makefile").exists() {
+                            Some("make".to_string())
+                        } else {
+                            None
+                        }
+                    })
+                });
+
+                // Determine repo: CLI flag > config (non-empty) > auto-detect (git remote) > current dir
+                let config_repo = effective_config.base.repo.filter(|s| !s.is_empty());
+                let project_root_clone = project_root.clone();
+                let repo = repo.or(config_repo).or_else(move || {
+                    // Try to get git remote URL from project root or current dir
+                    let check_dir = project_root_clone.or_else(|| std::env::current_dir().ok());
+                    check_dir.and_then(|dir| {
+                        std::process::Command::new("git")
+                            .arg("-C")
+                            .arg(&dir)
+                            .args(["config", "--get", "remote.origin.url"])
+                            .output()
+                            .ok()
+                            .and_then(|out| {
+                                if out.status.success() {
+                                    String::from_utf8(out.stdout).ok().map(|s| s.trim().to_string())
+                                } else {
+                                    None
+                                }
+                            })
+                            .filter(|s| !s.is_empty())
+                    })
+                }).or_else(|| {
+                    // Fallback: use project root or current dir as local path
+                    project_root
+                        .or_else(|| std::env::current_dir().ok())
+                        .map(|p| p.to_string_lossy().to_string())
+                });
+
+                let repo = match repo {
+                    Some(r) => r,
+                    None => {
+                        return Err(CliError::new(
+                            1,
+                            "repo is required (use --repo or set in .replica/settings.json)",
+                        )
+                        .with_hint("run `replica init` to create project config, or pass --repo")
+                        .into());
+                    }
+                };
+                let setup = match setup {
+                    Some(s) => s,
+                    None => {
+                        return Err(CliError::new(
+                            1,
+                            "setup command is required (use --setup or set in .replica/settings.json)",
+                        )
+                        .with_hint("run `replica init` to create project config, or pass --setup")
+                        .into());
+                    }
+                };
+
+                build_base(&r, &db, &repo, &setup)?
+            }
             BaseCmd::Check => check_base(&r)?,
             BaseCmd::Refresh => refresh_base(&r, &db)?,
             BaseCmd::Status { json } => status_base(&r, &db, json)?,

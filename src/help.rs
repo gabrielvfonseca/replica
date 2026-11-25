@@ -19,6 +19,7 @@ pub const TOPICS: &[(&str, &str)] = &[
     ),
     ("env", "environment variables set in each workspace"),
     ("exit-codes", "what each non-zero exit code means"),
+    ("config", "project-level configuration with .replica/"),
 ];
 
 /// Print the overview (no topic) or one topic to stdout.
@@ -94,6 +95,10 @@ fn overview(on: bool) -> String {
         cyan("setup  ", on)
     ));
     s.push_str(&format!(
+        "  {}  Initialize project configuration\n\n",
+        cyan("init   ", on)
+    ));
+    s.push_str(&format!(
         "  {}  Show this guide, or a topic below\n\n",
         cyan("help   ", on)
     ));
@@ -121,6 +126,7 @@ fn topic_text(topic: &str, on: bool) -> Option<String> {
         "agents" => AGENTS,
         "env" => ENV,
         "exit-codes" => EXIT_CODES,
+        "config" => CONFIG,
         _ => return None,
     };
     let mut out = String::new();
@@ -170,11 +176,16 @@ eviction from picking it. `replica rm <id>...` deletes one or more and is
 idempotent.
 ";
 
-const BASE: &str = "# The base tree
+const BASE: &str = r#"# The base tree
 
 The base is a git clone with its setup command already run, such as `npm ci`
 or `cargo fetch`. Workspaces are clones of it.
-$ replica base build --repo <url-or-path> --setup \"<command>\"
+$ replica base build [--repo <url-or-path>] [--setup "<command>"]
+
+`replica base build` auto-detects the repo (from git remote) and setup command
+(from Cargo.toml, package.json, go.mod, or Makefile) if not provided.
+$ replica base build              # Auto-detects repo and setup
+$ replica base build --repo .     # Use current dir as local repo
 
 `replica base status` shows age, git HEAD, lockfile hash, and whether the base
 is stale. `replica new --require-fresh` refuses to clone a stale base.
@@ -186,7 +197,7 @@ so existing workspaces keep working.
 `replica base check` looks for absolute paths to the golden tree that will
 break in a clone (venvs, node_modules/.bin, tsbuildinfo, and so on). Fix them
 with `--post-clone` or by regenerating them in each workspace.
-";
+"#;
 
 const SAFETY: &str = "# Disk safety
 
@@ -236,6 +247,103 @@ const EXIT_CODES: &str = "# Exit codes
 
 Errors are printed as `✗ message`, with a `hint:` line when Replica knows a fix.
 ";
+
+const CONFIG: &str = r#"# Project Configuration
+
+Replica supports per-project configuration via a `.replica/` directory at the
+root of your git repository.
+
+## Quick Start
+
+$ cd your-project
+$ replica init
+
+This creates:
+  .replica/settings.json          # Team-shared config (track in git)
+  .replica/config.local.json      # Machine-specific overrides (gitignored)
+  .replica/templates/             # Project-specific agent templates (optional)
+  .replica/skills/                # Project-specific agent skills (optional)
+
+And adds `.replica/config.local.json` to your `.gitignore`.
+
+## Configuration Files
+
+### settings.json (tracked)
+
+```json
+{
+  "base": {
+    "repo": "https://github.com/org/repo.git",
+    "setup_cmd": "npm ci",
+    "default_branch": "main"
+  },
+  "workspace": {
+    "default_ttl": "2h",
+    "default_name_template": "task-{{timestamp}}",
+    "post_clone_hooks": ["direnv allow", "pnpm install"],
+    "require_fresh_default": false
+  },
+  "gc": {
+    "high_water_mark": 80.0,
+    "low_water_mark": 60.0,
+    "ttl_override": null
+  },
+  "agents": {
+    "claude": { "append": ".replica/templates/claude.md" },
+    "cursor": { "replace": ".replica/templates/cursorrules" }
+  },
+  "skills": {
+    "enabled": true,
+    "custom_skills_dir": ".replica/skills"
+  }
+}
+```
+
+### config.local.json (gitignored)
+
+Override any setting for your local machine:
+
+```json
+{
+  "base": { "repo": "https://github.com/myfork/repo.git" },
+  "workspace": { "default_ttl": "4h" },
+  "gc": { "high_water_mark": 70.0 }
+}
+```
+
+## Precedence
+
+Values are resolved in this order (highest wins):
+
+1. CLI flags (e.g., `--ttl 1d`)
+2. `.replica/config.local.json` (machine-specific)
+3. `.replica/settings.json` (project defaults)
+4. Built-in defaults
+
+## Commands Using Project Config
+
+- `replica new` - uses default_ttl, default_name_template, post_clone_hooks, require_fresh_default, default_branch
+- `replica base build` - uses repo, setup_cmd
+- `replica gc` - uses high_water_mark, low_water_mark
+- `replica setup` - uses agents templates and skills
+
+## Templates
+
+Place agent-specific templates in `.replica/templates/`:
+- `claude.md` - appended to `~/.claude/CLAUDE.md`
+- `cursorrules` - replaces `.cursorrules`
+- `copilot-instructions.md` - appended to Copilot config
+- `zed-settings.json` - replaces Zed settings
+- `aider.conf.yml` - appended to Aider config
+
+Reference them in `settings.json` under `agents.<name>.append` or `.replace`.
+
+## Skills
+
+Place project-specific skills in `.replica/skills/<agent>/SKILL.md`.
+They will be installed alongside the global Replica skill when you run
+`replica setup`.
+"#;
 
 #[cfg(test)]
 mod tests {

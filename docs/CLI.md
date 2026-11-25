@@ -25,11 +25,13 @@ Clones the base into a new workspace with `clonefile(2)`. It prints the path on 
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--ttl` | `2h` | Lifetime: `30m`, `2h`, or `1d`. After this, `replica gc` removes it. |
-| `--name` | none | Label shown by `replica list`. |
-| `--post-clone` | none | Shell command run inside the new workspace after cloning. A failure keeps the workspace and exits 1. |
-| `--require-fresh` | off | Exit 2 instead of warning when the base is stale. |
-| `--ref` | none | Branch to create the workspace from. If the branch's lockfile hash matches the base, clone as normal and report "cloned directly". If it differs, clone the base, check out the branch, then run the setup command (an incremental install) and report `lockfile drift on branch my-feature-branch; running incremental install` (with the actual branch name). |
+| `--ttl` | `2h`* | Lifetime: `30m`, `2h`, or `1d`. After this, `replica gc` removes it. |
+| `--name` | none* | Label shown by `replica list`. |
+| `--post-clone` | none* | Shell command run inside the new workspace after cloning. A failure keeps the workspace and exits 1. |
+| `--require-fresh` | off* | Exit 2 instead of warning when the base is stale. |
+| `--ref` | none* | Branch to create the workspace from. If the branch's lockfile hash matches the base, clone as normal and report "cloned directly". If it differs, clone the base, check out the branch, then run the setup command (an incremental install) and report `lockfile drift on branch my-feature-branch; running incremental install` (with the actual branch name). |
+
+*Default can be set in `.replica/settings.json` under `workspace.default_ttl`, `workspace.default_name_template`, `workspace.post_clone_hooks`, `workspace.require_fresh_default`, and `base.default_branch`. CLI flags override config.
 
 Fails with exit 2 if no base exists, with exit 4 if `REPLICA_MAX_BYTES` is reached, and with exit 3 if the base and `ws/` are on different volumes.
 
@@ -85,10 +87,17 @@ The base is a git clone of your project with its setup command already run. Work
 ### `replica base build`
 
 ```
-replica base build --repo <url-or-path> --setup <cmd>
+replica base build [--repo <url-or-path>] [--setup <cmd>]
 ```
 
 Clones `--repo`, runs `--setup` inside the clone with `sh -c`, and swaps the result in as `base/`. A failed clone or setup leaves the existing base in place. On success it records the git HEAD, a hash of the lockfiles present, the repo, and the setup command. It then runs the same checks as `base check`.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--repo` | *auto* | Git repo URL or local path. Auto-detected from git remote, then project dir. Can be set in `.replica/settings.json` under `base.repo`. |
+| `--setup` | *auto* | Command run inside the clone to install dependencies (e.g., `"cargo build --release"`, `"npm ci"`). Auto-detected from project files (Cargo.toml, package.json, go.mod, Makefile). Can be set in `.replica/settings.json` under `base.setup_cmd`. |
+
+*If not provided via flags, values are auto-detected. Both are required (either via flags, config, or auto-detection).
 
 ### `replica base check`
 
@@ -155,6 +164,13 @@ replica gc [--dry-run] [--high 80] [--low 60]
 2. Removes every workspace past its TTL.
 3. If the volume is above `--high` percent (or the `REPLICA_MAX_BYTES` equivalent, if lower), evicts least-recently-used workspaces that were not used in the last 10 minutes, until usage is below `--low`.
 
+| Flag | Default | Meaning |
+|---|---|---|
+| `--high` | `80`* | Start evicting LRU workspaces above this volume usage %. |
+| `--low` | `60`* | Stop evicting once usage falls below this %. |
+
+*Defaults can be set in `.replica/settings.json` under `gc.high_water_mark` and `gc.low_water_mark`. CLI flags override config.
+
 `--dry-run` prints what would be removed and changes nothing. Each removal is printed with its reason: `expired` or `evicted for space`.
 
 ### `replica stats`
@@ -205,6 +221,16 @@ Two kinds of config are written:
 | `--homebrew` | Also write a local formula to `~/homebrew/replica.rb`. The formula has placeholder checksums and is not a supported install path; see HOMEBREW.md. |
 | `--config` | Read custom agents from a TOML file (default `~/.config/replica/agents.toml`). |
 
+### Project-Specific Agent Config
+
+If a `.replica/` directory exists in the current project (git root), `replica setup` also:
+
+- **Appends project templates** to agent configs (configured in `.replica/settings.json` under `agents.<name>.append`)
+- **Replaces agent configs** with project templates (configured under `agents.<name>.replace`, requires `--force`)
+- **Installs project-specific skills** from `.replica/skills/<agent>/SKILL.md` (if `skills.enabled` is true)
+
+See [CONFIG.md](CONFIG.md) for the full configuration schema.
+
 Custom agents use the same schema as the built-ins:
 
 ```toml
@@ -230,13 +256,29 @@ npx skills add gabrielvfonseca/replica --list     # see what is available
 
 `make skills-check` validates the frontmatter of every skill in the repo.
 
+### `replica init`
+
+```
+replica init [--path <dir>] [--yes] [--force]
+```
+
+Initializes a new project with `.replica/` configuration. Creates `settings.json` (tracked), `config.local.json` (gitignored), and updates `.gitignore`.
+
+| Flag | Meaning |
+|---|---|
+| `--path` | Project root (default: current directory) |
+| `--yes` | Non-interactive: use defaults, don't prompt |
+| `--force` | Overwrite existing config |
+
+Interactive mode prompts for base repo, setup command, workspace defaults, GC settings, agent templates, and skills configuration. Use `--yes` for CI/CD or scripting.
+
 ## Help
 
 ```
 replica help [topic]
 ```
 
-With no topic, prints the command overview and the topic list. Topics: `quickstart`, `workspaces`, `base`, `safety`, `agents`, `env`, `exit-codes`. Help never touches `REPLICA_ROOT`, so it works on a machine that has not been set up. An unknown topic exits 1 with the list of topics.
+With no topic, prints the command overview and the topic list. Topics: `quickstart`, `workspaces`, `base`, `safety`, `agents`, `env`, `exit-codes`, `config`. Help never touches `REPLICA_ROOT`, so it works on a machine that has not been set up. An unknown topic exits 1 with the list of topics.
 
 ## Exit codes
 

@@ -1,0 +1,25 @@
+{
+  "base": {
+    "setup_cmd": "cargo build --release",
+    "default_branch": "main"
+  },
+  "workspace": {
+    "default_ttl": "2h",
+    "default_name_template": "task-{{timestamp}}",
+    "post_clone_hooks": [],
+    "require_fresh_default": false
+  },
+  "gc": {
+    "high_water_mark": 80.0,
+    "low_water_mark": 60.0,
+    "ttl_override": null
+  },
+  "agents": {
+    "claude": { "append": ".replica/templates/claude.md" },
+    "cursor": { "replace": ".replica/templates/cursorrules" }
+  },
+  "skills": {
+    "enabled": true,
+    "custom_skills_dir": ".replica/skills"
+  }
+}

@@ -1,0 +1,16 @@
+# Replica Development Rules
+
+## Code Style
+- Use `anyhow::Result` for error handling
+- No `unwrap()` in non-test code
+- Follow existing patterns in the codebase
+
+## Testing
+- Run `cargo test` before committing
+- Add unit tests for new functionality
+- Integration tests in `tests/`
+
+## Architecture
+- macOS only (APFS clonefile)
+- Single binary, no daemon
+- SQLite for metadata (WAL mode)

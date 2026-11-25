@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use crate::config::ProjectConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -207,8 +208,50 @@ pub fn generate_agent_config(
     replica_root: &Path,
     force: bool,
     dry_run: bool,
+    project_root: Option<&Path>,
+    project_config: Option<&ProjectConfig>,
 ) -> Result<()> {
-    for config_file in &agent.config.config_files {
+    // Get project-specific template config for this agent
+    let project_template = project_config
+        .and_then(|pc| pc.agents.agents.get(&agent.config.name).cloned());
+
+    // Start with built-in config files
+    let mut config_files = agent.config.config_files.clone();
+
+    // Handle project-specific template if configured
+    if let Some(template) = project_template {
+        if let Some(append_path) = template.append {
+            if let Some(proj_root) = project_root {
+                let full_path = proj_root.join(&append_path);
+                if full_path.exists() {
+                    // Read project template and append to the first config file's template
+                    let project_template_content = get_template(&append_path, replica_root, project_root)?;
+                    if let Some(first) = config_files.first_mut() {
+                        // Get the built-in template content
+                        let builtin_content = get_template(&first.template, replica_root, project_root)?;
+                        // Combine: builtin first, then project template
+                        first.template = format!("{}\n\n{}", builtin_content, project_template_content);
+                        // Mark as inline content (not a file path)
+                        first.append = true;
+                    }
+                }
+            }
+        }
+        if let Some(replace_path) = template.replace {
+            if let Some(proj_root) = project_root {
+                let full_path = proj_root.join(&replace_path);
+                if full_path.exists() {
+                    // Replace the first config file with project-specific one
+                    if let Some(first) = config_files.first_mut() {
+                        first.template = replace_path;
+                        first.append = false;
+                    }
+                }
+            }
+        }
+    }
+
+    for config_file in &config_files {
         let target_path = expand_tilde(&config_file.target);
 
         if let Some(parent) = target_path.parent() {
@@ -218,7 +261,7 @@ pub fn generate_agent_config(
             }
         }
 
-        let template_content = get_template(&config_file.template, replica_root)?;
+        let template_content = get_template(&config_file.template, replica_root, project_root)?;
 
         let final_content = if config_file.append {
             // Appended configs are added once. Re-running setup must not duplicate them.
@@ -289,6 +332,8 @@ pub fn install_skills(
     _replica_root: &Path,
     _force: bool,
     dry_run: bool,
+    project_root: Option<&Path>,
+    project_config: Option<&ProjectConfig>,
 ) -> Result<()> {
     let skill_registration = &agent.config.skill_registration;
     if !skill_registration.enabled {
@@ -313,10 +358,61 @@ pub fn install_skills(
         println!("  wrote SKILL.md: {}", skill_md_path.display());
     }
 
+    // Install project-specific skills if configured
+    if let Some(pc) = project_config {
+        if pc.skills.enabled.unwrap_or(false) {
+            if let Some(custom_skills_dir) = &pc.skills.custom_skills_dir {
+                if let Some(proj_root) = project_root {
+                    let project_skill_dir = proj_root.join(custom_skills_dir).join(&agent.config.name);
+                    if project_skill_dir.exists() {
+                        let target_skill_dir = skill_dir.join(&agent.config.name);
+                        if !dry_run {
+                            fs::create_dir_all(&target_skill_dir).with_context(|| {
+                                format!("creating skill directory: {}", target_skill_dir.display())
+                            })?;
+                        }
+                        // Copy project skill files
+                        for entry in fs::read_dir(&project_skill_dir)? {
+                            let entry = entry?;
+                            let target = target_skill_dir.join(entry.file_name());
+                            if dry_run {
+                                println!("  would copy skill: {}", target.display());
+                            } else {
+                                fs::copy(entry.path(), &target).with_context(|| {
+                                    format!("copying skill: {}", target.display())
+                                })?;
+                                println!("  copied skill: {}", target.display());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
-fn get_template(template_name: &str, replica_root: &Path) -> Result<String> {
+fn get_template(template_name: &str, replica_root: &Path, project_root: Option<&Path>) -> Result<String> {
+    // If template_name contains newlines, treat as inline content (already combined)
+    if template_name.contains('\n') {
+        return Ok(template_name.to_string());
+    }
+
+    // First check for project-specific template
+    if let Some(proj_root) = project_root {
+        // If template_name contains path separator, treat as relative to project root
+        let project_template_path = if template_name.contains('/') {
+            proj_root.join(template_name)
+        } else {
+            proj_root.join(".replica").join("templates").join(template_name)
+        };
+        if project_template_path.exists() {
+            return fs::read_to_string(&project_template_path)
+                .with_context(|| format!("reading project template: {}", project_template_path.display()));
+        }
+    }
+
     let template = match template_name {
         "claude.md" => include_str!("../templates/claude.md"),
         "cursorrules" => include_str!("../templates/cursorrules"),
@@ -324,6 +420,16 @@ fn get_template(template_name: &str, replica_root: &Path) -> Result<String> {
         "zed-settings.json" => include_str!("../templates/zed-settings.json"),
         "aider.conf.yml" => include_str!("../templates/aider.conf.yml"),
         _ => {
+            // Check if it's a project-relative path
+            if let Some(proj_root) = project_root {
+                if template_name.contains('/') {
+                    let project_template_path = proj_root.join(template_name);
+                    if project_template_path.exists() {
+                        return fs::read_to_string(&project_template_path)
+                            .with_context(|| format!("reading project template: {}", project_template_path.display()));
+                    }
+                }
+            }
             let template_path = replica_root.join("templates").join(template_name);
             if template_path.exists() {
                 return fs::read_to_string(&template_path)
@@ -430,10 +536,14 @@ pub fn run_setup(
     force: bool,
     dry_run: bool,
     custom_config: Option<&Path>,
+    project_root: Option<&Path>,
 ) -> Result<()> {
     println!("Replica Setup");
     println!("==========");
     println!("REPLICA_ROOT: {}", replica_root.display());
+    if let Some(proj_root) = project_root {
+        println!("Project root: {}", proj_root.display());
+    }
     println!();
 
     let agents = detect_agents(custom_config)?;
@@ -444,6 +554,9 @@ pub fn run_setup(
         println!("Add custom agents in ~/.config/replica/agents.toml");
         return Ok(());
     }
+
+    // Load project config for agent templates and skills
+    let project_config = project_root.and_then(|pr| crate::config::load_project_config(pr).ok()).map(|rc| rc.config);
 
     println!("Detected {} agent(s):", agents.len());
     for agent in &agents {
@@ -462,8 +575,8 @@ pub fn run_setup(
 
     for agent in &agents {
         println!("Configuring {}...", agent.config.name);
-        generate_agent_config(agent, replica_root, force, dry_run)?;
-        install_skills(agent, replica_root, force, dry_run)?;
+        generate_agent_config(agent, replica_root, force, dry_run, project_root, project_config.as_ref())?;
+        install_skills(agent, replica_root, force, dry_run, project_root, project_config.as_ref())?;
         println!();
     }
 

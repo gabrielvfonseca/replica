@@ -178,8 +178,8 @@ fn appended_config_is_added_once() {
     fs::write(&target, "# My notes\n").unwrap();
     let agent = agent_for(&target, "claude.md", true);
 
-    replica::setup::generate_agent_config(&agent, temp.path(), false, false).unwrap();
-    replica::setup::generate_agent_config(&agent, temp.path(), false, false).unwrap();
+    replica::setup::generate_agent_config(&agent, temp.path(), false, false, None, None).unwrap();
+    replica::setup::generate_agent_config(&agent, temp.path(), false, false, None, None).unwrap();
 
     let text = fs::read_to_string(&target).unwrap();
     assert!(text.starts_with("# My notes"), "user content must be kept");
@@ -197,11 +197,11 @@ fn replaced_config_is_kept_without_force_and_backed_up_with_force() {
     fs::write(&target, "my rules").unwrap();
     let agent = agent_for(&target, "cursorrules", false);
 
-    replica::setup::generate_agent_config(&agent, temp.path(), false, false).unwrap();
+    replica::setup::generate_agent_config(&agent, temp.path(), false, false, None, None).unwrap();
     assert_eq!(fs::read_to_string(&target).unwrap(), "my rules");
     assert!(!temp.path().join(".cursorrules.bak").exists());
 
-    replica::setup::generate_agent_config(&agent, temp.path(), true, false).unwrap();
+    replica::setup::generate_agent_config(&agent, temp.path(), true, false, None, None).unwrap();
     assert_ne!(fs::read_to_string(&target).unwrap(), "my rules");
     assert_eq!(
         fs::read_to_string(temp.path().join(".cursorrules.bak")).unwrap(),
@@ -214,6 +214,6 @@ fn dry_run_writes_nothing() {
     let temp = tempdir().unwrap();
     let target = temp.path().join("fresh.md");
     let agent = agent_for(&target, "claude.md", true);
-    replica::setup::generate_agent_config(&agent, temp.path(), false, true).unwrap();
+    replica::setup::generate_agent_config(&agent, temp.path(), false, true, None, None).unwrap();
     assert!(!target.exists());
 }
